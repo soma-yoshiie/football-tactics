@@ -54,6 +54,7 @@ header{
   cursor:pointer;transition:.15s;
 }
 .icon:active{transform:scale(.92);background:var(--panel2)}
+.icon svg{width:19px;height:19px;display:block}
 
 /* ---------- Formation bar ---------- */
 .fbar{display:flex;gap:7px;overflow-x:auto;padding:4px 14px 10px;flex-shrink:0;scrollbar-width:none}
@@ -87,7 +88,7 @@ header{
 /* ---------- Player token ---------- */
 .tok{
   position:absolute;width:64px;transform:translate(-50%,-50%);
-  display:flex;flex-direction:column;align-items:center;cursor:grab;touch-action:none;z-index:2;
+  display:flex;flex-direction:column;align-items:center;cursor:grab;touch-action:pan-y;z-index:2;
 }
 .tok.drag{z-index:30;cursor:grabbing}
 .disc{
@@ -239,7 +240,9 @@ header{
 .hint{position:absolute;left:50%;top:46%;transform:translateX(-50%);text-align:center;color:rgba(255,255,255,.5);font-size:12px;pointer-events:none;width:80%}
 
 /* ---------- Ball ---------- */
-.ball{position:absolute;width:22px;height:22px;transform:translate(-50%,-50%);z-index:4;cursor:grab;touch-action:none}
+.ball{position:absolute;width:22px;height:22px;transform:translate(-50%,-50%);z-index:4;cursor:grab;touch-action:pan-y}
+/* 長押しでドラッグ可能になった合図 */
+.tok.armed .disc,.ball.armed .b{box-shadow:0 0 0 3px var(--lime),0 5px 14px rgba(0,0,0,.5)}
 .ball .b{width:22px;height:22px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#fff,#cfd6cf 70%,#9aa39a);box-shadow:0 3px 8px rgba(0,0,0,.55),inset 0 0 0 2px rgba(0,0,0,.12);position:relative}
 .ball .b::after{content:"";position:absolute;inset:5px;border-radius:50%;background:
   radial-gradient(circle at 50% 50%,#222 0 3px,transparent 3.5px) ,
@@ -387,7 +390,9 @@ header{
   -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
 }
 .fpback:active{transform:scale(.95)}
-.fptag{margin-left:auto;font-family:'Bebas Neue';font-size:13px;letter-spacing:2px;color:rgba(234,255,240,.5)}
+.fptag{margin-left:auto;font-family:'Bebas Neue';font-size:20px;letter-spacing:1.5px;color:rgba(234,255,240,.85)}
+.fptag b{color:var(--lime)}
+.fpbtn.fpsmall svg{width:20px;height:20px;display:block}
 .fpctrl{display:flex;align-items:center;gap:9px;justify-content:flex-end}
 .fpbtn{
   border:0;cursor:pointer;user-select:none;
@@ -428,8 +433,8 @@ header{
       <div class="tag" id="teamTag">tactics board</div>
     </div>
     <div class="hbtn">
-      <div class="icon" id="btnShare" title="共有">📤</div>
-      <div class="icon" id="btnAnim" title="アニメ">🎬</div>
+      <div class="icon" id="btnShare" title="共有"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 19v-3a4 4 0 0 1 4-4h12"/></svg></div>
+      <div class="icon" id="btnAnim" title="アニメ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9"/><path d="m12.4 3.4 3.1 4"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></div>
       <div class="icon" id="btnLoad" title="クラブ読込">⬇</div>
       <div class="icon" id="btnMarket" title="移籍市場">⇄</div>
       <div class="icon" id="btnReset" title="整列リセット">⟲</div>
@@ -492,9 +497,10 @@ header{
 <div class="fpover" id="fpover">
   <div class="fptop">
     <div class="fpback" id="fpClose">‹ 戻る</div>
-    <div class="fptag">FULLSCREEN</div>
+    <div class="fptag">STARTING <b>XI</b></div>
   </div>
   <div class="fpctrl">
+    <div class="fpbtn fpsmall" id="fpShare" title="共有"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 17 20 12 15 7"/><path d="M4 19v-3a4 4 0 0 1 4-4h12"/></svg></div>
     <div class="fpbtn fpsmall" id="fpReset" title="最初へ">⟲</div>
     <div class="fpbtn fplay" id="fpPlay">▶ 再生</div>
   </div>
@@ -2241,21 +2247,42 @@ FORMS.forEach(f=>{
 /* =========================================================
    Drag & tap on tokens
    ========================================================= */
+const HOLD_MS=160; // この時間「触れたまま」でドラッグ可能に（誤スクロール防止）
 function attachDrag(el,actor){
   let sx,sy,ox,oy,moved,rect,recording,pts;
+  let holdT=null,armed=false,aborted=false,pid=null;
   const base=()=>actor==='ball'?state.ball:state.slots[actor];
-  el.addEventListener('pointerdown',e=>{
-    e.preventDefault();
-    rect=pitch.getBoundingClientRect();moved=false;
-    sx=e.clientX;sy=e.clientY;const b=base();ox=b.x;oy=b.y;
-    el.setPointerCapture(e.pointerId);el.classList.add('drag');
+  function arm(){
+    if(sx===undefined||aborted)return;
+    armed=true; el.classList.add('drag','armed');
+    el.style.touchAction='none';             // ドラッグ中はスクロールを止める
+    try{ el.setPointerCapture(pid); }catch(_){}
+    const b=base(); ox=b.x; oy=b.y;          // 押し続けた位置を基準に
     if(mode==='anim'){recording=true;pts=[{x:ox,y:oy}];}
+    if(navigator.vibrate){ try{navigator.vibrate(8);}catch(_){} }
+  }
+  function clearTA(){ el.style.touchAction=''; }
+  el.addEventListener('pointerdown',e=>{
+    rect=pitch.getBoundingClientRect();moved=false;aborted=false;armed=false;
+    sx=e.clientX;sy=e.clientY;pid=e.pointerId;const b=base();ox=b.x;oy=b.y;
+    if(e.pointerType==='mouse'){            // マウスは即ドラッグ
+      e.preventDefault(); arm();
+    }else{                                   // タッチ/ペンは長押しで起動
+      clearTimeout(holdT); holdT=setTimeout(arm,HOLD_MS);
+    }
   });
   el.addEventListener('pointermove',e=>{
     if(sx===undefined)return;
-    if(Math.abs(e.clientX-sx)>5||Math.abs(e.clientY-sy)>5)moved=true;
-    const nx=clamp(ox+(e.clientX-sx)/rect.width*100,3,97);
-    const ny=clamp(oy-(e.clientY-sy)/rect.height*100,3,97);
+    const dxp=e.clientX-sx, dyp=e.clientY-sy;
+    if(!armed){
+      // まだドラッグ起動前：大きく動いたらスクロール意図とみなし中止（ページに任せる）
+      if(Math.abs(dxp)>8||Math.abs(dyp)>8){ aborted=true; clearTimeout(holdT); }
+      return;
+    }
+    e.preventDefault();
+    if(Math.abs(dxp)>5||Math.abs(dyp)>5)moved=true;
+    const nx=clamp(ox+dxp/rect.width*100,3,97);
+    const ny=clamp(oy-dyp/rect.height*100,3,97);
     if(mode==='anim'){
       if(recording){const last=pts[pts.length-1];if(Math.hypot(nx-last.x,ny-last.y)>2.2)pts.push({x:nx,y:ny});drawTempPath(actor,pts);}
       el.style.left=nx+'%';el.style.top=(100-ny)+'%';
@@ -2264,8 +2291,20 @@ function attachDrag(el,actor){
     }
   });
   el.addEventListener('pointerup',e=>{
-    el.classList.remove('drag');
-    if(sx===undefined)return;sx=undefined;
+    clearTimeout(holdT); clearTA();
+    el.classList.remove('drag','armed');
+    if(sx===undefined)return;
+    const wasArmed=armed, wasAborted=aborted;
+    sx=undefined; armed=false; aborted=false;
+    if(wasAborted){ recording=false;tempDraw=null; return; } // スクロールだったので何もしない
+    if(!wasArmed){ // 長押し前に指を離した＝タップ扱い
+      if(mode==='anim'){
+        const grp=overlapGroupAt(actor);
+        if(grp.length>1){ const i=grp.indexOf(raised);const next=grp[(i+1)%grp.length];setRaised(next);selActor=next;drawPaths();renderClips();toast('操作対象：'+actorLabel(next)+'（被り切替）'); }
+        else { setRaised(null); selActor=(selActor===actor?null:actor); drawPaths();renderClips(); }
+      }else{ if(actor!=='ball')onSlotTap(actor); }
+      return;
+    }
     if(mode==='anim'){
       recording=false;tempDraw=null;
       if(!moved){
@@ -2315,7 +2354,7 @@ function attachDrag(el,actor){
       save();
     }
   });
-  el.addEventListener('pointercancel',()=>{el.classList.remove('drag');sx=undefined;recording=false;tempDraw=null;});
+  el.addEventListener('pointercancel',()=>{clearTimeout(holdT);clearTA();el.classList.remove('drag','armed');sx=undefined;armed=false;aborted=false;recording=false;tempDraw=null;});
 }
 function clamp(v,a,b){return Math.max(a,Math.min(b,v))}
 
@@ -3282,6 +3321,7 @@ document.getElementById('aTogglePaths').onclick=()=>setShowPaths(!showPaths);
 document.getElementById('aFull').onclick=enterFullplay;
 document.getElementById('fpPlay').onclick=()=>{play.playing?stopPlay():startPlay();};
 document.getElementById('fpReset').onclick=resetPlay;
+document.getElementById('fpShare').onclick=shareLineup;
 document.getElementById('fpClose').onclick=exitFullplay;
 document.getElementById('aDone').onclick=closeStudio;
 document.getElementById('aPlay').onclick=()=>{ play.playing?stopPlay():startPlay(); };
